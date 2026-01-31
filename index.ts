@@ -66,7 +66,7 @@ Bun.serve({
             `, { headers: { "content-type": "text/html; charset=utf-8" } });
         } else if(url.pathname === '/') {
             console.log("-- HTML --");
-            return new Response(`My Bun VLESS Server is running`,{
+            return new Response(`My Bun Server is running`,{
                 headers:{
                 "content-type": "text/pain; charset=utf-8"
                 }
