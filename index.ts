@@ -140,19 +140,28 @@ Bun.serve({
       const proxyPort = parseInt(PROXY.split(":")[1]||"");
 
       try {
-        const socket = await Bun.connect({
+       const socket = await Bun.connect({
           hostname: !!PROXY ? proxyHost : remoteAddr,
           port: !!PROXY ? proxyPort : remotePort,
           socket: {
+            // 1. 关键：连接成功后立即发起 SOCKS5 版本协商
+            open(s) {
+              if (PROXY !== "") {
+                const handshake = new Uint8Array([0x05, 0x01, 0x00]);
+                s.write(handshake);
+                (s as any).handshakeSent = true;
+              }
+            },
             data(s, data) {
                 const res = Uint8Array.from(data);
-                // 代理了
                 if(PROXY !== "") {
-                    // 状态机：处理 socks5 响应
+                    // 状态机 A: 收到 0x05 0x00，说明协商通过，发送 CONNECT 请求
                     if (res[0] === 0x05 && res[1] === 0x00 && !(s as any).requestSent) {
-                        // 收到握手确认，发送连接请求 (command: 0x01 connect)
                         const req = new Uint8Array(6 + (addrType === 2 ? hostraw.length + 1 : hostraw.length));
-                        req[0] = 0x05; req[1] = 0x01; req[2] = 0x00; req[3] = addrType;
+                        req[0] = 0x05; 
+                        req[1] = 0x01; // CMD: CONNECT
+                        req[2] = 0x00; 
+                        req[3] = addrType;
                         let pos = 4;
                         if (addrType === 2) { req[pos++] = hostraw.length; }
                         req.set(hostraw, pos);
@@ -162,20 +171,26 @@ Bun.serve({
                         
                         s.write(req);
                         (s as any).requestSent = true;
-                    } else if (res[0] === 0x05 && res[1] === 0x00 && (s as any).requestSent && !(s as any).proxyReady) {
-                        // 连接目标成功
+                    } 
+                    // 状态机 B: 收到连接成功的响应（通常长度 >= 10）
+                    else if (res[0] === 0x05 && res[1] === 0x00 && (s as any).requestSent && !(s as any).proxyReady) {
                         (s as any).proxyReady = true;
-                        // 发送 vless 响应头并透传初始数据
+                        
+                        // 发送 vless 响应头
                         if (!(ws as any).isHeaderSent) {
-                        ws.send(new Uint8Array([version, 0]));
-                        (ws as any).isHeaderSent = true;
+                          ws.send(new Uint8Array([version, 0]));
+                          (ws as any).isHeaderSent = true;
                         }
+                        
+                        // 重要：将 VLESS 握手时带的剩余数据（如果有）透传给目标
                         if (firstpayload.length > 0) s.write(firstpayload);
-                    }  else if ((s as any).proxyReady) {
-                        // 代理完全就绪，进入纯透传模式
+                    }  
+                    // 状态机 C: 代理已完全就绪，进入纯透传模式
+                    else if ((s as any).proxyReady) {
                         ws.send(data);
                     }
                 } else {
+                    // 直连模式逻辑不变
                     if (!(ws as any).isHeaderSent) {
                         ws.send(new Uint8Array([version, 0]));
                         (ws as any).isHeaderSent = true;
